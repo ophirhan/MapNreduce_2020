@@ -1,6 +1,8 @@
 #ifndef MAPREDUCEFRAMEWORK_H
 #define MAPREDUCEFRAMEWORK_H
 
+#define PERCENTAGE 100.0f
+
 #include "MapReduceClient.h"
 
 typedef void* JobHandle;

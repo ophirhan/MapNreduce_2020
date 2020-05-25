@@ -1,0 +1,4 @@
+add_executable(SampleClient SampleClient.cpp)
+add_executable(FileWordCounter FileWordCounter.cpp)
+target_link_libraries(SampleClient PUBLIC Threads::Threads MapReduceFramework)
+target_link_libraries(FileWordCounter PUBLIC Threads::Threads MapReduceFramework)

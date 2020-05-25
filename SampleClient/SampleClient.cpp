@@ -60,6 +60,7 @@ public:
     }
 
 	void map(const K1* key, const V1* value, void* context) const {
+        //printf("Hello");
 		std::array<unsigned int, 256> counts;
 		counts.fill(0);
 		for(const char& c : static_cast<const VString*>(value)->content) {
