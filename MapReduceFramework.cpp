@@ -132,6 +132,7 @@ void reduceWrapper(void* context){
         pthread_cond_broadcast(tJob->doneCv);
     }
     pthread_mutex_unlock(tJob->doneMutex);
+    pthread_exit(EXIT_SUCCESS);
     //todo terminate?
 }
 
@@ -251,6 +252,7 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
     pthread_mutex_t shuffDone = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_t percMutex = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_t outVecMutex = PTHREAD_MUTEX_INITIALIZER;
+//    pthread_mutex_init(&outVecMutex, nullptr);
     pthread_mutex_t doneMutex = PTHREAD_MUTEX_INITIALIZER;
 
     data->percMutex = &percMutex;
@@ -268,6 +270,8 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
         myData->threadID = i;
         myData->inputVec = &inputVec;
         pthread_mutex_t vecMutex = PTHREAD_MUTEX_INITIALIZER;
+//        pthread_mutex_t vecMutex;
+//        pthread_mutex_init(&vecMutex, nullptr);
         myData->tvAndMutex = new threadVectorAndMutex();
         myData->tvAndMutex->first = new threadVector();
         myData->tvAndMutex->second = &vecMutex;
@@ -294,17 +298,19 @@ void waitForJob(JobHandle job){
 }
 
 void getJobState(JobHandle job, JobState* state){
-    auto* context = (JobContext*) job;
+    auto context = (JobContext*) job;
     state->stage =  context->jobState->stage; // todo what?
+    pthread_mutex_lock(context->percMutex);
     state->percentage =  context->jobState->percentage;
+    pthread_mutex_unlock(context->percMutex);
 }
 
 void closeJobHandle(JobHandle job){
     waitForJob(job);
     auto* context = (JobContext*) job;
     pthread_mutex_destroy(context->doneMutex);
-    pthread_mutex_destroy(context->percMutex);
-    pthread_mutex_destroy(context->outVecMutex);
+//    pthread_mutex_destroy(context->percMutex);
+//    pthread_mutex_destroy(context->outVecMutex);
     pthread_mutex_destroy(context->shuffleDoneMutex);
     pthread_cond_destroy(context->doneCv);
     pthread_cond_destroy(context->shuffleDone);
@@ -324,7 +330,8 @@ void emit2 (K2* key, V2* value, void* context){
 }
 
 void emit3 (K3* key, V3* value, void* context){
-    auto* tData = (JobContext*) context;
+    JobContext* tData;
+    tData = (JobContext*) context;
     pthread_mutex_lock(tData->outVecMutex);
     tData->out->push_back(std::make_pair(key, value));
     pthread_mutex_unlock(tData->outVecMutex);
