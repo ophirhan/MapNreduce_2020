@@ -231,13 +231,10 @@ int main(int argc, char** argv)
 		delete pair.first;
 		delete pair.second;
 	}
-
     for (unsigned int i = 0; i < paths.size(); i++)
     {
         delete paths[i];
     }
-
-	
 	return 0;
 }
 

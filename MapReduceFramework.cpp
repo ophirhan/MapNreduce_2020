@@ -46,12 +46,6 @@ typedef struct {
     // how many threads have finished map phase
     std::atomic<int>* processedKeys;
 
-    // how many threads have finished map phase
-    std::atomic<uint64_t>* jobStateBitField;
-
-//    // is shuffle phase over?
-//    pthread_cond_t* doneCv;
-
     // is shuffle phase over?
     pthread_mutex_t* outVecMutex;
 
@@ -93,7 +87,9 @@ typedef struct{
     JobContext* job;
 
     // personal output vec for mapthread
-    threadVectorAndMutex* tvAndMutex;
+    threadVector* tv;
+
+    pthread_mutex_t* tvMutex;
 
 
 
@@ -102,7 +98,10 @@ typedef struct{
 typedef struct{
 
     // all personal output thread vectors
-    std::vector<std::pair<threadVector*, pthread_mutex_t*>>* threadVectors;
+    std::vector<threadVector*>* threadVectors;
+
+    // all personal output thread vectors
+    std::vector<pthread_mutex_t*>* threadMutexes;
 
     //common job map threads need
     JobContext* data;
@@ -121,15 +120,6 @@ void reduceWrapper(void* context){
         pthread_mutex_unlock(tJob->jobStateMutex);
         oldValue = (*tJob->workCounter)++;
     }
-//    pthread_mutex_lock(tJob->jobStateMutex);
-//    if(tJob->jobState->percentage == PERCENTAGE){
-//        pthread_mutex_lock(tJob->doneMutex);
-//        tJob->doneJob = true;
-//        pthread_cond_broadcast(tJob->doneCv);
-//        pthread_mutex_unlock(tJob->doneMutex);
-//    }
-//    pthread_mutex_unlock(tJob->jobStateMutex);
-//    pthread_exit(EXIT_SUCCESS);
 }
 
 void* mapNreduce(void *context){
@@ -148,7 +138,9 @@ void* mapNreduce(void *context){
         old_value = (*tData->job->workCounter)++;
     }
     tData->job->mapBarrier->barrier();
-    reduceWrapper(tData->job);
+    JobContext* job = tData->job;
+    delete tData;
+    reduceWrapper(job);
     return context;
 }
 
@@ -163,8 +155,8 @@ JobHandle shuffle(void* context){
     {
         for(int i = 0; i < mapThreadCount; ++i)
         {
-            threadVector* curVec = sData->threadVectors->at(i).first;
-            pthread_mutex_t* mutex = sData->threadVectors->at(i).second;
+            threadVector* curVec = sData->threadVectors->at(i);
+            pthread_mutex_t* mutex = sData->threadMutexes->at(i);
             pthread_mutex_lock(mutex);
             while(!curVec->empty())
             {
@@ -202,12 +194,20 @@ JobHandle shuffle(void* context){
             }
         }
     }
-    for(auto & threadVector : *sData->threadVectors)
-    {
-        pthread_mutex_destroy(threadVector.second);
-        free(threadVector.second);
-        delete threadVector.first;
+    for(int i=0; i < mapThreadCount; ++i){
+        delete sData->threadVectors->at(i);
+        pthread_mutex_destroy(sData->threadMutexes->at(i));
+        free(sData->threadMutexes->at(i));
     }
+//    for(auto & threadVector : *sData->threadVectors)
+//    {
+//        pthread_mutex_destroy(threadVector);
+//        free(threadVector.second);
+//        delete threadVector.first;
+//    }
+//    std::vector<threadVectorAndMutex>().swap(*sData->threadVectors);
+    delete sData->threadVectors;
+    delete sData->threadMutexes;
     (*sData->data->workCounter) = 0;
     (*sData->data->processedKeys) = 0;
     pthread_mutex_lock(sData->data->jobStateMutex);
@@ -216,7 +216,9 @@ JobHandle shuffle(void* context){
     pthread_mutex_unlock(sData->data->jobStateMutex);
 
     sData->data->mapBarrier->barrier();
-    reduceWrapper(sData->data);
+    JobContext* job = sData->data;
+    delete sData;
+    reduceWrapper(job);
     return nullptr;
 }
 
@@ -224,7 +226,9 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
                             const InputVec& inputVec, OutputVec& outputVec,
                             int multiThreadLevel){
     auto* threads = new pthread_t[multiThreadLevel];
-    auto* threadVectors = new std::vector<threadVectorAndMutex>;
+
+    auto* threadVectors = new std::vector<threadVector*>;
+    auto threadMutexes = new std::vector<pthread_mutex_t*>;
 
     auto* data = new JobContext;
     data->jobState = new JobState;
@@ -245,7 +249,6 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
     data->pairCount = new std::atomic<int>(0);
     data->processedKeys = new std::atomic<int>(0);
     data->workCounter = new std::atomic<unsigned long>(0);
-    data->jobStateBitField = new std::atomic<uint64_t>(0);//todo
 
 
     data->multiThreadLevel = multiThreadLevel;
@@ -271,17 +274,18 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
         myData->inputVec = &inputVec;
         auto vecMutex = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
         pthread_mutex_init(vecMutex, nullptr);
-        myData->tvAndMutex = new threadVectorAndMutex();
-        myData->tvAndMutex->first = new threadVector();
-        myData->tvAndMutex->second = vecMutex;
-        threadVectors->push_back(*myData->tvAndMutex);
+        myData->tv = new threadVector();
+        myData->tvMutex = vecMutex;
+        threadVectors->push_back(myData->tv);
+        threadMutexes->push_back(myData->tvMutex);
         myData->job = data;
         pthread_create(threads + i, nullptr, mapNreduce, myData);
     }
-    auto shuffi = new shuffleThread;
-    shuffi->threadVectors = threadVectors;
-    shuffi->data = data;
-    pthread_create(threads + (multiThreadLevel - 1), nullptr, shuffle, shuffi);
+    auto shuffleContext = new shuffleThread;
+    shuffleContext->threadVectors = threadVectors;
+    shuffleContext->threadMutexes = threadMutexes;
+    shuffleContext->data = data;
+    pthread_create(threads + (multiThreadLevel - 1), nullptr, shuffle, shuffleContext);
     return data;
 }
 
@@ -311,6 +315,8 @@ void closeJobHandle(JobHandle job){
     free(context->jobStateMutex);
     pthread_mutex_destroy(context->outVecMutex);
     free(context->outVecMutex);
+    delete context->inter;
+    delete context->interKeys;
     delete context->pairCount;
     delete context->processedKeys;
     delete context->workCounter;
@@ -322,9 +328,9 @@ void closeJobHandle(JobHandle job){
 
 void emit2 (K2* key, V2* value, void* context){
     auto tData = (mapThread*) context;
-    pthread_mutex_lock(tData->tvAndMutex->second);
-    tData->tvAndMutex->first->emplace_back(key,value);
-    pthread_mutex_unlock(tData->tvAndMutex->second);
+    pthread_mutex_lock(tData->tvMutex);
+    tData->tv->emplace_back(key,value);
+    pthread_mutex_unlock(tData->tvMutex);
     ++(*tData->job->pairCount);
 }
 
