@@ -7,6 +7,7 @@
 class Barrier {
 public:
 	Barrier(int numThreads);
+	void getCount(int*);
 	~Barrier();
 	void barrier();
 

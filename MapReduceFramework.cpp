@@ -3,6 +3,7 @@
 //
 #include "MapReduceFramework.h"
 #include <pthread.h>
+#include "Barrier.h"
 #include <cstdio>
 #include <atomic>
 
@@ -37,10 +38,14 @@ typedef struct {
     const MapReduceClient* client;
 
     // how many threads have finished map phase
-    std::atomic<int>* mapBarrier;
+    //std::atomic<int>* mapBarrier;
+    Barrier* mapBarrier;
 
     // how many threads have finished map phase
     std::atomic<int>* processedKeys;
+
+    // how many threads have finished map phase
+    std::atomic<uint64_t>* jobStateBitField;
 
     // is shuffle phase over?
     pthread_cond_t* shuffleDone;
@@ -55,7 +60,7 @@ typedef struct {
     pthread_mutex_t* outVecMutex;
 
     // is shuffle phase over?
-    pthread_mutex_t* percMutex;
+    pthread_mutex_t* jobStateMutex;
 
     // is shuffle phase over?
     pthread_mutex_t* doneMutex;
@@ -120,18 +125,20 @@ void reduceWrapper(void* context){
     {
         K2* key = tJob->interKeys->at(oldValue);
         tJob->client->reduce(key, tJob->inter->at(key), context);
-        pthread_mutex_lock(tJob->percMutex);
+        pthread_mutex_lock(tJob->jobStateMutex);
         tJob->jobState->percentage = (PERCENTAGE * ((float) ++(*tJob->processedKeys)/
                 tJob->interKeys->size()));
-        pthread_mutex_unlock(tJob->percMutex);
+        pthread_mutex_unlock(tJob->jobStateMutex);
         oldValue = (*tJob->workCounter)++;
     }
-    pthread_mutex_lock(tJob->doneMutex);
+    pthread_mutex_lock(tJob->jobStateMutex);
     if(tJob->jobState->percentage == PERCENTAGE){
+        pthread_mutex_lock(tJob->doneMutex);
         tJob->doneJob = true;
         pthread_cond_broadcast(tJob->doneCv);
+        pthread_mutex_unlock(tJob->doneMutex);
     }
-    pthread_mutex_unlock(tJob->doneMutex);
+    pthread_mutex_unlock(tJob->jobStateMutex);
     pthread_exit(EXIT_SUCCESS);
     //todo terminate?
 }
@@ -145,20 +152,20 @@ void* mapNreduce(void *context){
         JobContext* c = tData->job;
         const MapReduceClient* b = c->client;
         b->map(a.first, a.second, context);
-        pthread_mutex_lock(tData->job->percMutex);
+        pthread_mutex_lock(tData->job->jobStateMutex);
         tData->job->jobState->percentage = (PERCENTAGE * ((float) ++(*tData->job->processedKeys)/
                                                           tData->inputVec->size()));
-        pthread_mutex_unlock(tData->job->percMutex);
+        pthread_mutex_unlock(tData->job->jobStateMutex);
         old_value = (*tData->job->workCounter)++;
     }
-    (*tData->job->mapBarrier)++;
-    //waitForJob(tData->job->shuffleDone); // todo find shuffle jobhandle
-    if(pthread_mutex_lock(tData->job->shuffleDoneMutex) != 0){
-        //todo
-        //exit()
-    }
-    pthread_cond_wait(tData->job->shuffleDone, tData->job->shuffleDoneMutex);
-    pthread_mutex_unlock(tData->job->shuffleDoneMutex);
+    //(*tData->job->mapBarrier)++;
+    tData->job->mapBarrier->barrier();
+//    if(pthread_mutex_lock(tData->job->shuffleDoneMutex) != 0){
+//        //todo
+//        //exit()
+//    }
+//    pthread_cond_wait(tData->job->shuffleDone, tData->job->shuffleDoneMutex);
+//    pthread_mutex_unlock(tData->job->shuffleDoneMutex);
     reduceWrapper(tData->job);
     //    tData->job->client->reduce(tData->job->inputVec->at(old_value).first, tData->job->inputVec->at(old_value).second, context);
     // const K1* key, const V1* value, void* context
@@ -194,16 +201,22 @@ JobHandle shuffle(void* context){
                 shuffleCount++;
                 if(sData->data->jobState->stage == SHUFFLE_STAGE)
                 {
+                    pthread_mutex_lock(sData->data->jobStateMutex);//todo bdika
                     sData->data->jobState->percentage = PERCENTAGE * (shuffleCount / totalJob);
+                    pthread_mutex_unlock(sData->data->jobStateMutex);
                 }
             }
             pthread_mutex_unlock(mutex);
         }
-        if(*sData->data->mapBarrier == mapThreadCount)
+        int count;
+        sData->data->mapBarrier->getCount(&count);
+        if(count == mapThreadCount)
         {
+            pthread_mutex_lock(sData->data->jobStateMutex);//todo bdika
             sData->data->jobState->stage = SHUFFLE_STAGE;
             totalJob = shuffleCount + *sData->data->pairCount;
             sData->data->jobState->percentage = PERCENTAGE * (shuffleCount / totalJob);
+            pthread_mutex_unlock(sData->data->jobStateMutex);
             if (*sData->data->pairCount == 0)
             {
                 done = true;
@@ -214,16 +227,19 @@ JobHandle shuffle(void* context){
     {
         pthread_mutex_destroy(threadVector.second);
     }
-    if(pthread_mutex_lock(sData->data->shuffleDoneMutex) != 0){
-        //todo
-        //exit()
-    }
+//    if(pthread_mutex_lock(sData->data->shuffleDoneMutex) != 0){
+//        //todo
+//        //exit()
+//    }
     (*sData->data->workCounter) = 0;
     (*sData->data->processedKeys) = 0;
+    pthread_mutex_lock(sData->data->jobStateMutex); //todo bdika
     sData->data->jobState->stage = REDUCE_STAGE;
     sData->data->jobState->percentage = 0.0;
-    pthread_cond_broadcast(sData->data->shuffleDone);
-    pthread_mutex_unlock(sData->data->shuffleDoneMutex);
+    pthread_mutex_unlock(sData->data->jobStateMutex);//
+    //pthread_cond_broadcast(sData->data->shuffleDone);
+    sData->data->mapBarrier->barrier();
+    //pthread_mutex_unlock(sData->data->shuffleDoneMutex);
     reduceWrapper(sData->data);
     return nullptr;
 }
@@ -237,44 +253,52 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
     auto* data = new JobContext;
     data->inter = new IntermediateMap;
     data->client = &client;
-    data->mapBarrier = new std::atomic<int>(0);
+    //data->mapBarrier = new std::atomic<int>(0);
+    data->mapBarrier = new Barrier(multiThreadLevel);
     data->pairCount = new std::atomic<int>(0);
     data->processedKeys = new std::atomic<int>(0);
     data->workCounter = new std::atomic<unsigned long>(0);
+    data->jobStateBitField = new std::atomic<uint64_t>(0);
     data->interKeys = new std::vector<K2*>();
     data->jobState = new JobState;
     data->jobState->stage = UNDEFINED_STAGE;
-    data->jobState->percentage = 0.0;
+    data->jobState->percentage = 0.0; // only thread running
 
     pthread_cond_t shuffleDone = PTHREAD_COND_INITIALIZER;
     pthread_cond_t doneCv = PTHREAD_COND_INITIALIZER;
 
-    pthread_mutex_t shuffDone = PTHREAD_MUTEX_INITIALIZER;
-    pthread_mutex_t percMutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_mutex_t outVecMutex = PTHREAD_MUTEX_INITIALIZER;
-//    pthread_mutex_init(&outVecMutex, nullptr);
-    pthread_mutex_t doneMutex = PTHREAD_MUTEX_INITIALIZER;
+    auto shuffDone = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(shuffDone, nullptr);
+    auto percMutex = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(percMutex, nullptr);
+    auto outVecMutex = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(outVecMutex, nullptr);
+    auto doneMutex = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(doneMutex, nullptr);
 
-    data->percMutex = &percMutex;
+    data->jobStateMutex = percMutex;
     data->shuffleDone = &shuffleDone;
     data->doneCv = &doneCv;
     data->doneJob = false;
-    data->shuffleDoneMutex = &shuffDone;
-    data->outVecMutex = &outVecMutex;
-    data->doneMutex = &doneMutex;
+    data->shuffleDoneMutex = shuffDone;
+    data->outVecMutex = outVecMutex;
+    data->doneMutex = doneMutex;
 
     data->out = &outputVec;
     data->jobState->stage = MAP_STAGE;
+
     for(int i = 0; i < multiThreadLevel - 1; ++i){
         auto* myData = new mapThread;
         myData->threadID = i;
         myData->inputVec = &inputVec;
-        pthread_mutex_t vecMutex = PTHREAD_MUTEX_INITIALIZER;
+        auto vecMutex = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
+        pthread_mutex_init(vecMutex, nullptr);
+//        pthread_mutex_t vecMutex = PTHREAD_MUTEX_INITIALIZER;
 //        pthread_mutex_t vecMutex;
 //        pthread_mutex_init(&vecMutex, nullptr);
         myData->tvAndMutex = new threadVectorAndMutex();
         myData->tvAndMutex->first = new threadVector();
-        myData->tvAndMutex->second = &vecMutex;
+        myData->tvAndMutex->second = vecMutex;
         threadVectors->push_back(*myData->tvAndMutex);
         myData->job = data;
         pthread_create(threads + i, nullptr, mapNreduce, myData);
@@ -299,26 +323,27 @@ void waitForJob(JobHandle job){
 
 void getJobState(JobHandle job, JobState* state){
     auto context = (JobContext*) job;
+    pthread_mutex_lock(context->jobStateMutex);
+//    *state = *context->jobState;
     state->stage =  context->jobState->stage; // todo what?
-    pthread_mutex_lock(context->percMutex);
     state->percentage =  context->jobState->percentage;
-    pthread_mutex_unlock(context->percMutex);
+    pthread_mutex_unlock(context->jobStateMutex);
 }
 
 void closeJobHandle(JobHandle job){
-    waitForJob(job);
-    auto* context = (JobContext*) job;
-    pthread_mutex_destroy(context->doneMutex);
-//    pthread_mutex_destroy(context->percMutex);
+//    waitForJob(job);
+//    auto* context = (JobContext*) job;
+//    pthread_mutex_destroy(context->doneMutex);
+//    pthread_mutex_destroy(context->jobStateMutex);
 //    pthread_mutex_destroy(context->outVecMutex);
-    pthread_mutex_destroy(context->shuffleDoneMutex);
-    pthread_cond_destroy(context->doneCv);
-    pthread_cond_destroy(context->shuffleDone);
-    delete context->pairCount;
-    delete context->processedKeys;
-    delete context->mapBarrier;
-    delete context->workCounter;
-    delete context->jobState;
+//    pthread_mutex_destroy(context->shuffleDoneMutex);
+//    pthread_cond_destroy(context->doneCv);
+//    pthread_cond_destroy(context->shuffleDone);
+//    delete context->pairCount;
+//    delete context->processedKeys;
+//    delete context->mapBarrier;
+//    delete context->workCounter;
+//    delete context->jobState;
 }
 
 void emit2 (K2* key, V2* value, void* context){

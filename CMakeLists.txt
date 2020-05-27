@@ -24,7 +24,7 @@ find_package(Threads REQUIRED)
 
 add_library(MapReduceFramework
         MapReduceClient.h
-        MapReduceFramework.cpp MapReduceFramework.h
+        MapReduceFramework.cpp MapReduceFramework.h Barrier.h Barrier.cpp
         # ------------- Add your own .h/.cpp files here -------------------
         )
 

@@ -46,3 +46,9 @@ void Barrier::barrier()
 		exit(1);
 	}
 }
+
+void Barrier::getCount(int* out) {
+    pthread_mutex_lock(&mutex);
+    *out = count;
+    pthread_mutex_unlock(&mutex);
+}
