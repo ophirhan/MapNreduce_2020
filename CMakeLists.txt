@@ -30,11 +30,11 @@ add_library(MapReduceFramework
 
 
 set_property(TARGET MapReduceFramework PROPERTY CXX_STANDARD 11)
-target_compile_options(MapReduceFramework PUBLIC -Wall -Wextra -O2)
+target_compile_options(MapReduceFramework PUBLIC -Wall -Wextra -O0)
 target_include_directories(MapReduceFramework PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(MapReduceFramework PUBLIC Threads::Threads)
 
 
 add_subdirectory(SampleClient)
-
+#add_subdirectory(euro)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

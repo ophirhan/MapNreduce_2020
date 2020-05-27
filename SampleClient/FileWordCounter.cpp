@@ -211,13 +211,13 @@ int main(int argc, char** argv)
     
 	while (state.stage != REDUCE_STAGE || state.percentage != 100.0)
 	{
-        /* if (last_state.stage != state.stage || last_state.percentage != state.percentage){ */
-        /*      printf("stage %d, %.2f %% \n", state.stage, state.percentage); */
-        /* } */
+        if (last_state.stage != state.stage || last_state.percentage != state.percentage){
+             printf("stage %d, %.2f %% \n", state.stage, state.percentage);
+        }
         last_state = state;
 		getJobState(job, &state);
 	}
-    /* printf("stage %d, %.2f %% \n", state.stage, state.percentage); */
+    printf("stage %d, %.2f %% \n", state.stage, state.percentage);
 	
 	closeJobHandle(job);
 	printf("Done!\n");
