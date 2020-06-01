@@ -115,9 +115,15 @@ void reduceWrapper(void* context){
     {
         K2* key = tJob->interKeys->at(oldValue);
         tJob->client->reduce(key, tJob->inter->at(key), context);
-        pthread_mutex_lock(tJob->jobStateMutex);
+        if(pthread_mutex_lock(tJob->jobStateMutex) != 0){
+            fprintf(stderr, "system error: error on pthread_mutex_lock\n");
+            exit(1);
+        }
         tJob->jobState->percentage = (PERCENTAGE * ((float) ++(*tJob->processedKeys)/interKeysSize));
-        pthread_mutex_unlock(tJob->jobStateMutex);
+        if(pthread_mutex_unlock(tJob->jobStateMutex) != 0){
+            fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
+            exit(1);
+        }
         oldValue = (*tJob->workCounter)++;
     }
 }
@@ -131,10 +137,16 @@ void* mapNreduce(void *context){
         JobContext* c = tData->job;
         const MapReduceClient* b = c->client;
         b->map(a.first, a.second, context);
-        pthread_mutex_lock(tData->job->jobStateMutex);
+        if(pthread_mutex_lock(tData->job->jobStateMutex) != 0){
+            fprintf(stderr, "system error: error on pthread_mutex_lock\n");
+            exit(1);
+        }
         tData->job->jobState->percentage = (PERCENTAGE * ((float) ++(*tData->job->processedKeys)/
                                                           tData->inputVec->size()));
-        pthread_mutex_unlock(tData->job->jobStateMutex);
+        if(pthread_mutex_unlock(tData->job->jobStateMutex) != 0){
+            fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
+            exit(1);
+        }
         old_value = (*tData->job->workCounter)++;
     }
     tData->job->mapBarrier->barrier();
@@ -157,7 +169,10 @@ JobHandle shuffle(void* context){
         {
             threadVector* curVec = sData->threadVectors->at(i);
             pthread_mutex_t* mutex = sData->threadMutexes->at(i);
-            pthread_mutex_lock(mutex);
+            if(pthread_mutex_lock(mutex) != 0){
+                fprintf(stderr, "system error: error on pthread_mutex_lock\n");
+                exit(1);
+            }
             while(!curVec->empty())
             {
                 IntermediatePair pair  = curVec->at(0);
@@ -171,23 +186,38 @@ JobHandle shuffle(void* context){
                 --(*sData->data->pairCount);
                 shuffleCount++;
             }
-            pthread_mutex_unlock(mutex);
-            pthread_mutex_lock(sData->data->jobStateMutex);
+            if(pthread_mutex_unlock(mutex) != 0){
+                fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
+                exit(1);
+            }
+            if(pthread_mutex_lock(sData->data->jobStateMutex) != 0){
+                fprintf(stderr, "system error: error on pthread_mutex_lock\n");
+                exit(1);
+            }
             if(sData->data->jobState->stage == SHUFFLE_STAGE)
             {
                 sData->data->jobState->percentage = PERCENTAGE * (shuffleCount / totalJob);
             }
-            pthread_mutex_unlock(sData->data->jobStateMutex);
+            if(pthread_mutex_unlock(sData->data->jobStateMutex) != 0){
+                fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
+                exit(1);
+            }
         }
         int count;
         sData->data->mapBarrier->getCount(&count);
         if(count == mapThreadCount)
         {
-            pthread_mutex_lock(sData->data->jobStateMutex);
+            if(pthread_mutex_lock(sData->data->jobStateMutex) != 0){
+                fprintf(stderr, "system error: error on pthread_mutex_lock\n");
+                exit(1);
+            }
             sData->data->jobState->stage = SHUFFLE_STAGE;
             totalJob = shuffleCount + *sData->data->pairCount;
             sData->data->jobState->percentage = PERCENTAGE * (shuffleCount / totalJob);
-            pthread_mutex_unlock(sData->data->jobStateMutex);
+            if(pthread_mutex_unlock(sData->data->jobStateMutex) != 0){
+                fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
+                exit(1);
+            }
             if (*sData->data->pairCount == 0)
             {
                 done = true;
@@ -196,24 +226,26 @@ JobHandle shuffle(void* context){
     }
     for(int i=0; i < mapThreadCount; ++i){
         delete sData->threadVectors->at(i);
-        pthread_mutex_destroy(sData->threadMutexes->at(i));
+        if(pthread_mutex_destroy(sData->threadMutexes->at(i)) != 0){
+            fprintf(stderr, "system error: error on pthread_mutex_destroy\n");
+            exit(1);
+        }
         free(sData->threadMutexes->at(i));
     }
-//    for(auto & threadVector : *sData->threadVectors)
-//    {
-//        pthread_mutex_destroy(threadVector);
-//        free(threadVector.second);
-//        delete threadVector.first;
-//    }
-//    std::vector<threadVectorAndMutex>().swap(*sData->threadVectors);
     delete sData->threadVectors;
     delete sData->threadMutexes;
     (*sData->data->workCounter) = 0;
     (*sData->data->processedKeys) = 0;
-    pthread_mutex_lock(sData->data->jobStateMutex);
+    if(pthread_mutex_lock(sData->data->jobStateMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_lock\n");
+        exit(1);
+    }
     sData->data->jobState->stage = REDUCE_STAGE;
     sData->data->jobState->percentage = 0.0;
-    pthread_mutex_unlock(sData->data->jobStateMutex);
+    if(pthread_mutex_unlock(sData->data->jobStateMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
+        exit(1);
+    }
 
     sData->data->mapBarrier->barrier();
     JobContext* job = sData->data;
@@ -243,7 +275,6 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
     data->interKeys = new std::vector<K2*>();
 
     data->client = &client;
-    //data->mapBarrier = new std::atomic<int>(0);
     data->mapBarrier = new Barrier(multiThreadLevel);
 
     data->pairCount = new std::atomic<int>(0);
@@ -254,15 +285,36 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
     data->multiThreadLevel = multiThreadLevel;
 
     auto percMutex = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
-    pthread_mutex_init(percMutex, nullptr);
+    if(percMutex == nullptr){
+        fprintf(stderr, "system error: error on malloc\n");
+        exit(1);
+    }
+    if(pthread_mutex_init(percMutex, nullptr) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_init\n");
+        exit(1);
+    }
     data->jobStateMutex = percMutex;
 
     auto outVecMutex = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
-    pthread_mutex_init(outVecMutex, nullptr);
+    if(outVecMutex == nullptr){
+        fprintf(stderr, "system error: error on malloc\n");
+        exit(1);
+    }
+    if(pthread_mutex_init(outVecMutex, nullptr) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_init\n");
+        exit(1);
+    }
     data->outVecMutex = outVecMutex;
 
     auto doneMutex = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
-    pthread_mutex_init(doneMutex, nullptr);
+    if(doneMutex == nullptr){
+        fprintf(stderr, "system error: error on malloc\n");
+        exit(1);
+    }
+    if(pthread_mutex_init(doneMutex, nullptr) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_init\n");
+        exit(1);
+    }
     data->doneMutex = doneMutex;
 
     data->doneJob = false;
@@ -273,47 +325,79 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
         auto* myData = new mapThread;
         myData->inputVec = &inputVec;
         auto vecMutex = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
-        pthread_mutex_init(vecMutex, nullptr);
+        if(vecMutex == nullptr){
+            fprintf(stderr, "system error: error on malloc\n");
+            exit(1);
+        }
+        if(pthread_mutex_init(vecMutex, nullptr) != 0){
+            fprintf(stderr, "system error: error on pthread_mutex_init\n");
+            exit(1);
+        }
         myData->tv = new threadVector();
         myData->tvMutex = vecMutex;
         threadVectors->push_back(myData->tv);
         threadMutexes->push_back(myData->tvMutex);
         myData->job = data;
-        pthread_create(threads + i, nullptr, mapNreduce, myData);
+        if(pthread_create(threads + i, nullptr, mapNreduce, myData) != 0){
+            fprintf(stderr, "system error: error on pthread_create\n");
+            exit(1);
+        }
     }
     auto shuffleContext = new shuffleThread;
     shuffleContext->threadVectors = threadVectors;
     shuffleContext->threadMutexes = threadMutexes;
     shuffleContext->data = data;
-    pthread_create(threads + (multiThreadLevel - 1), nullptr, shuffle, shuffleContext);
+    if(pthread_create(threads + (multiThreadLevel - 1),
+            nullptr, shuffle, shuffleContext) != 0){
+        fprintf(stderr, "system error: error on pthread_create\n");
+        exit(1);
+    }
     return data;
 }
 
 void waitForJob(JobHandle job){
     auto* context = (JobContext*) job;
     for(int i=0;i < context->multiThreadLevel; ++i){
-        pthread_join(context->threads[i], nullptr);
+        if(pthread_join(context->threads[i], nullptr) != 0){
+            fprintf(stderr, "system error: error on pthread_join\n");
+            exit(1);
+        }
     }
 
 }
 
 void getJobState(JobHandle job, JobState* state){
     auto context = (JobContext*) job;
-    pthread_mutex_lock(context->jobStateMutex);
+    if(pthread_mutex_lock(context->jobStateMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_lock\n");
+        exit(1);
+    }
     state->stage =  context->jobState->stage;
     state->percentage =  context->jobState->percentage;
-    pthread_mutex_unlock(context->jobStateMutex);
+    if(pthread_mutex_unlock(context->jobStateMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
+        exit(1);
+    }
 }
 
 void closeJobHandle(JobHandle job){
     waitForJob(job);
 
     auto* context = (JobContext*) job;
-    pthread_mutex_destroy(context->doneMutex);
+    if(pthread_mutex_destroy(context->doneMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_destroy\n");
+        exit(1);
+    }
     free(context->doneMutex);
-    pthread_mutex_destroy(context->jobStateMutex);
+    if(pthread_mutex_destroy(context->jobStateMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_destroy\n");
+        exit(1);
+    }
     free(context->jobStateMutex);
-    pthread_mutex_destroy(context->outVecMutex);
+    if(pthread_mutex_destroy(context->outVecMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_destroy\n");
+        exit(1);
+    }
     free(context->outVecMutex);
     delete context->inter;
     delete context->interKeys;
@@ -328,16 +412,28 @@ void closeJobHandle(JobHandle job){
 
 void emit2 (K2* key, V2* value, void* context){
     auto tData = (mapThread*) context;
-    pthread_mutex_lock(tData->tvMutex);
+    if(pthread_mutex_lock(tData->tvMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_lock\n");
+        exit(1);
+    }
     tData->tv->emplace_back(key,value);
-    pthread_mutex_unlock(tData->tvMutex);
+    if(pthread_mutex_unlock(tData->tvMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
+        exit(1);
+    }
     ++(*tData->job->pairCount);
 }
 
 void emit3 (K3* key, V3* value, void* context){
     JobContext* tData;
     tData = (JobContext*) context;
-    pthread_mutex_lock(tData->outVecMutex);
+    if(pthread_mutex_lock(tData->outVecMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_lock\n");
+        exit(1);
+    }
     tData->out->emplace_back(key, value);
-    pthread_mutex_unlock(tData->outVecMutex);
+    if(pthread_mutex_unlock(tData->outVecMutex) != 0){
+        fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
+        exit(1);
+    }
 }

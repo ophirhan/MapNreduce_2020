@@ -48,7 +48,13 @@ void Barrier::barrier()
 }
 
 void Barrier::getCount(int* out) {
-    pthread_mutex_lock(&mutex);
+    if(pthread_mutex_lock(&mutex) != 0){
+        fprintf(stderr, "[[Barrier]] error on pthread_mutex_lock");
+        exit(1);
+    }
     *out = count;
-    pthread_mutex_unlock(&mutex);
+    if(pthread_mutex_unlock(&mutex) != 0){
+        fprintf(stderr, "[[Barrier]] error on pthread_mutex_unlock");
+        exit(1);
+    }
 }
