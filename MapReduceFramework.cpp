@@ -9,7 +9,6 @@
 
 
 typedef std::vector<std::pair<K2*,V2*>> threadVector;
-typedef std::pair<threadVector*, pthread_mutex_t*> threadVectorAndMutex;
 
 
 /**
@@ -75,6 +74,9 @@ typedef struct {
 
     // how many threads do we have
     int multiThreadLevel;
+
+    // atomic bool
+    std::atomic_bool* done;
 
 } JobContext;
 
@@ -280,6 +282,7 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
     data->pairCount = new std::atomic<int>(0);
     data->processedKeys = new std::atomic<int>(0);
     data->workCounter = new std::atomic<unsigned long>(0);
+    data->done = new std::atomic_bool(false);
 
 
     data->multiThreadLevel = multiThreadLevel;
@@ -356,7 +359,11 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
 }
 
 void waitForJob(JobHandle job){
-    auto* context = (JobContext*) job;
+    auto context = (JobContext*) job;
+    if(*context->done){
+        return;
+    }
+    *context->done= true;
     for(int i=0;i < context->multiThreadLevel; ++i){
         if(pthread_join(context->threads[i], nullptr) != 0){
             fprintf(stderr, "system error: error on pthread_join\n");
@@ -406,6 +413,7 @@ void closeJobHandle(JobHandle job){
     delete context->workCounter;
     delete context->jobState;
     delete context->mapBarrier;
+    delete context->done;
     delete[] context->threads;
     delete context;
 }

@@ -13,6 +13,7 @@
 
 #include<map>
 extern int errno ;
+#include <sys/time.h>
 
 pthread_mutex_t k2ResourcesMutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -194,46 +195,73 @@ int parse_input(int argc, char **argv, InputVec *in, std::vector<VPath *> *paths
 
 int main(int argc, char** argv)
 {
-	InputVec inputVec;
-    std::vector<VPath *> paths;
-    int thread_num;
-    if (parse_input(argc, argv, &inputVec, &paths, thread_num) < 0){
-        printf("FAIL\n");
-        exit(-1);
-    }
-	CounterClient client;
-	OutputVec outputVec;
-
-	JobState state;
-    JobState last_state={UNDEFINED_STAGE,0};
-	JobHandle job = startMapReduceJob(client, inputVec, outputVec, thread_num); 
-	getJobState(job, &state);
-    
-	while (state.stage != REDUCE_STAGE || state.percentage != 100.0)
-	{
-        if (last_state.stage != state.stage || last_state.percentage != state.percentage){
-             printf("stage %d, %.2f %% \n", state.stage, state.percentage);
+    long resultSec[9];
+    for(int j = 21; j<31;++j){
+        timeval start = {0, 0};
+        timeval end = {0, 0};
+        if(gettimeofday(&start, nullptr) == -1)
+        {
+            return -1;
         }
-        last_state = state;
-		getJobState(job, &state);
-	}
-    printf("stage %d, %.2f %% \n", state.stage, state.percentage);
-	
-	closeJobHandle(job);
-	printf("Done!\n");
-	
-	for (OutputPair& pair: outputVec) {
-        std::string s = ((const KWord*)pair.first)->s;
-		int count = ((const VCount*)pair.second)->count;
-        if (count > 100)
-            printf("The word %s appeared %d time%s\n", s.c_str(), 
-                    count, count > 1 ? "s" : "");
-		delete pair.first;
-		delete pair.second;
-	}
-    for (unsigned int i = 0; i < paths.size(); i++)
-    {
-        delete paths[i];
+
+            InputVec inputVec;
+            std::vector<VPath *> paths;
+            int thread_num;
+            if (parse_input(argc, argv, &inputVec, &paths, thread_num) < 0){
+                printf("FAIL\n");
+                exit(-1);
+            }
+            CounterClient client;
+            OutputVec outputVec;
+
+            JobState state;
+            JobState last_state={UNDEFINED_STAGE,0};
+            thread_num = j;
+            JobHandle job = startMapReduceJob(client, inputVec, outputVec, thread_num);
+            getJobState(job, &state);
+
+//            while (state.stage != REDUCE_STAGE || state.percentage != 100.0)
+//            {
+//                if (last_state.stage != state.stage || last_state.percentage != state.percentage){
+//                    printf("stage %d, %.2f %% \n", state.stage, state.percentage);
+//                }
+//                last_state = state;
+//                getJobState(job, &state);
+//            }
+//            printf("stage %d, %.2f %% \n", state.stage, state.percentage);
+
+            closeJobHandle(job);
+//            printf("Done!\n");
+
+            for (OutputPair& pair: outputVec) {
+                std::string s = ((const KWord*)pair.first)->s;
+                int count = ((const VCount*)pair.second)->count;
+                if (count > 100)
+//                    printf("The word %s appeared %d time%s\n", s.c_str(),
+//                           count, count > 1 ? "s" : "");
+                delete pair.first;
+                delete pair.second;
+            }
+            for (unsigned int i = 0; i < paths.size(); i++)
+            {
+                delete paths[i];
+            }
+
+
+        if(gettimeofday(&end, nullptr) == -1)
+        {
+            return -1;
+        }
+//        auto useconds = (float) (end.tv_usec - start.tv_usec);
+//        std::cout << useconds << std::endl;
+//        float usecs = useconds/1000000;
+//        std::cout << usecs << std::endl;
+//        float seconds = (float) end.tv_sec - (float) start.tv_sec;
+        resultSec[j - 21] = (end.tv_sec-start.tv_sec);
+    }
+    std::cout << std::endl;
+    for(int i = 0; i < 9; ++i){
+        std::cout << "numofthreads " << i + 21 << " time:" << resultSec[i] << std::endl;
     }
 	return 0;
 }
