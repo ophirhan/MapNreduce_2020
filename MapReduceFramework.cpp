@@ -120,6 +120,10 @@ initJobContext(const MapReduceClient &client, OutputVec &outputVec, int multiThr
 
 mapThread *initMapThreadData(const InputVec &inputVec, JobContext *data);
 
+shuffleThread *
+initShuffleStruct(std::vector<threadVector *> *threadVectors, std::vector<pthread_mutex_t *> *threadMutexes,
+                  JobContext *data);
+
 /**
  * This function is responsible to find next available key to reduce and call reduce upon it.
  * @param context void* (JobContext*) pointer to struct containing needed resources.
@@ -181,9 +185,9 @@ void* mapNreduce(void *context){
 
 /**
  * Iterates through all private thread vectors and sorts their content into an intermediate map.
- * after that 
- * @param context 
- * @return 
+ * after that
+ * @param context
+ * @return
  */
 JobHandle shuffle(void* context){
     auto* sData = (shuffleThread*) context;
@@ -230,14 +234,14 @@ float setShuffle(const shuffleThread *sData, float shuffleCount, float totalJob)
 {
     if(pthread_mutex_lock(sData->data->jobStateMutex) != 0){
         fprintf(stderr, "system error: error on pthread_mutex_lock\n");
-                exit(1);
+        exit(1);
     }
     sData->data->jobState->stage = SHUFFLE_STAGE;
     totalJob = shuffleCount + *sData->data->pairCount;
     sData->data->jobState->percentage = PERCENTAGE * (shuffleCount / totalJob);
     if(pthread_mutex_unlock(sData->data->jobStateMutex) != 0){
         fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
-                exit(1);
+        exit(1);
     }
     return totalJob;
 }
@@ -258,7 +262,7 @@ float processVector(const shuffleThread *sData, float shuffleCount, float totalJ
     pthread_mutex_t* curMutex = sData->threadMutexes->at(treadNum);
     if(pthread_mutex_lock(curMutex) != 0){
         fprintf(stderr, "system error: error on pthread_mutex_lock\n");
-                exit(1);
+        exit(1);
     }
     while(!curVec->empty())
     {
@@ -275,12 +279,12 @@ float processVector(const shuffleThread *sData, float shuffleCount, float totalJ
     }
     if(pthread_mutex_unlock(curMutex) != 0){
         fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
-                exit(1);
+        exit(1);
     }
 
     if(pthread_mutex_lock(sData->data->jobStateMutex) != 0){
         fprintf(stderr, "system error: error on pthread_mutex_lock\n");
-                exit(1);
+        exit(1);
     }
     if(sData->data->jobState->stage == SHUFFLE_STAGE)
     {
@@ -288,7 +292,7 @@ float processVector(const shuffleThread *sData, float shuffleCount, float totalJ
     }
     if(pthread_mutex_unlock(sData->data->jobStateMutex) != 0){
         fprintf(stderr, "system error: error on pthread_mutex_unlock\n");
-                exit(1);
+        exit(1);
     }
     return shuffleCount;
 }
@@ -354,18 +358,36 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
             exit(1);
         }
     }
-    auto shuffleContext = new shuffleThread;
-    shuffleContext->threadVectors = threadVectors;
-    shuffleContext->threadMutexes = threadMutexes;
-    shuffleContext->data = data;
+    shuffleThread *shuffleContext = initShuffleStruct(threadVectors, threadMutexes, data);
     if(pthread_create(threads + (multiThreadLevel - 1),
-            nullptr, shuffle, shuffleContext) != 0){
+                      nullptr, shuffle, shuffleContext) != 0){
         fprintf(stderr, "system error: error on pthread_create\n");
         exit(1);
     }
     return data;
 }
-
+/**
+ * This function initializes the shuffle thread
+ * @param threadVectors - the private work vector of each map thread
+ * @param threadMutexes - the mutexes of the work vectors
+ * @param data  - the job context of the current job
+ * @return all the data needed for the shuffle to commence
+ */
+shuffleThread *
+initShuffleStruct(std::vector<threadVector *> *threadVectors, std::vector<pthread_mutex_t *> *threadMutexes,
+                  JobContext *data) {
+    auto shuffleContext = new shuffleThread;
+    shuffleContext->threadVectors = threadVectors;
+    shuffleContext->threadMutexes = threadMutexes;
+    shuffleContext->data = data;
+    return shuffleContext;
+}
+/**
+ * This function initialize a mapping thread
+ * @param inputVec - the input vector of data from the user
+ * @param data - the job context of the current job
+ * @return data for a single mapping thread
+ */
 mapThread *initMapThreadData(const InputVec &inputVec, JobContext *data)
 {
     auto* myData = new mapThread;
@@ -373,18 +395,26 @@ mapThread *initMapThreadData(const InputVec &inputVec, JobContext *data)
     auto vecMutex = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
     if(vecMutex == nullptr){
         fprintf(stderr, "system error: error on malloc\n");
-            exit(1);
+        exit(1);
     }
     if(pthread_mutex_init(vecMutex, nullptr) != 0){
         fprintf(stderr, "system error: error on pthread_mutex_init\n");
-            exit(1);
+        exit(1);
     }
     myData->tv = new threadVector();
     myData->tvMutex = vecMutex;
     myData->job = data;
     return myData;
 }
-
+/**
+ *
+ * This function initialize all the information needed for the requested job.
+ * @param client - the current user of the program
+ * @param outputVec - the output requested in a vector
+ * @param multiThreadLevel - the maximum number of working threads
+ * @param threads  - an array of threads to create
+ * @return The information needed for the jon, held in a single struct.
+ */
 JobContext *
 initJobContext(const MapReduceClient &client, OutputVec &outputVec, int multiThreadLevel,
                pthread_t *threads)
@@ -448,7 +478,10 @@ initJobContext(const MapReduceClient &client, OutputVec &outputVec, int multiThr
     data->jobState->stage = MAP_STAGE;
     return data;
 }
-
+/**
+ * This function waits for a job to finish.
+ * @param job - which the function waits for
+ */
 void waitForJob(JobHandle job){
     auto context = (JobContext*) job;
     if(*context->someoneWaiting){
@@ -463,7 +496,11 @@ void waitForJob(JobHandle job){
     }
 
 }
-
+/**
+ * THis function gets the current job state of the program
+ * @param job  - the context of the function
+ * @param state -  the struct to fill
+ */
 void getJobState(JobHandle job, JobState* state){
     auto context = (JobContext*) job;
     if(pthread_mutex_lock(context->jobStateMutex) != 0){
@@ -477,7 +514,10 @@ void getJobState(JobHandle job, JobState* state){
         exit(1);
     }
 }
-
+/**
+ * This function closes all the resources that the program used
+ * @param job  - the context of the function
+ */
 void closeJobHandle(JobHandle job){
     waitForJob(job);
 
@@ -508,7 +548,12 @@ void closeJobHandle(JobHandle job){
     delete[] context->threads;
     delete context;
 }
-
+/**
+ * This function produces a (K2*,V2*) pair.
+ * @param key recieved from the user
+ * @param value received from the user
+ * @param context - the context of the function
+ */
 void emit2 (K2* key, V2* value, void* context){
     auto tData = (mapThread*) context;
     if(pthread_mutex_lock(tData->tvMutex) != 0){
@@ -523,6 +568,12 @@ void emit2 (K2* key, V2* value, void* context){
     ++(*tData->job->pairCount);
 }
 
+/**
+ * This function produces a (K3*,V3*) pair.
+ * @param key received from the user
+ * @param value received from the user
+ * @param context - the context of the function
+ */
 void emit3 (K3* key, V3* value, void* context){
     JobContext* tData;
     tData = (JobContext*) context;
