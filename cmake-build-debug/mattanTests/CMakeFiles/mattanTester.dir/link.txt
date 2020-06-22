@@ -1,1 +1,0 @@
-/usr/bin/c++  -g -fno-omit-frame-pointer -fsanitize=thread  -rdynamic CMakeFiles/mattanTester.dir/SampleClient.cpp.o  -o mattanTester ../libMapReduceFramework.a ../lib/libgtest_maind.a ../lib/libgtestd.a -pthread 
